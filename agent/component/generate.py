@@ -224,13 +224,14 @@ class Generate(ComponentBase):
         if len(msg) < 2:
             msg.append({"role": "user", "content": "Output: "})
         ans = chat_mdl.chat(msg[0]["content"], msg[1:], self._param.gen_conf())
-        ans = re.sub(r"^.*</think>", "", ans, flags=re.DOTALL)
+        reasoning = chat_mdl.get_reasoning_content()
         self._canvas.set_component_infor(self._id, {"prompt":msg[0]["content"],"messages":  msg[1:],"conf":  self._param.gen_conf()})
         if self._param.cite and "chunks" in retrieval_res.columns:
             res = self.set_cite(retrieval_res, ans)
+            res["reasoning_content"] = reasoning
             return pd.DataFrame([res])
 
-        return Generate.be_output(ans)
+        return pd.DataFrame([{"content": ans, "reasoning_content": reasoning}])
 
     def stream_output(self, chat_mdl, prompt, retrieval_res):
         res = None
@@ -250,13 +251,21 @@ class Generate(ComponentBase):
         if len(msg) < 2:
             msg.append({"role": "user", "content": "Output: "})
         answer = ""
+        last_reasoning = ""
         for ans in chat_mdl.chat_streamly(msg[0]["content"], msg[1:], self._param.gen_conf()):
-            res = {"content": ans, "reference": []}
             answer = ans
+            if "</think>" in ans:
+                parts = ans.split("</think>", 1)
+                last_reasoning = parts[0] + "</think>"
+                content = parts[1]
+            else:
+                content = ans
+            res = {"content": content, "reasoning_content": last_reasoning, "reference": []}
             yield res
 
         if self._param.cite and "chunks" in retrieval_res.columns:
             res = self.set_cite(retrieval_res, answer)
+            res["reasoning_content"] = chat_mdl.get_reasoning_content()
             yield res
         self._canvas.set_component_infor(self._id, {"prompt":msg[0]["content"],"messages":  msg[1:],"conf":  self._param.gen_conf()})
         self.set_output(Generate.be_output(res))

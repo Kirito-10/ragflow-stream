@@ -194,6 +194,9 @@ class Base(ABC):
                 if any([not response.choices, not response.choices[0].message, not response.choices[0].message.content]):
                     return "", 0
                 ans = response.choices[0].message.content.strip()
+                # Wrap reasoning_content in <think> tags if present (e.g. DeepSeek R1)
+                if hasattr(response.choices[0].message, "reasoning_content") and response.choices[0].message.reasoning_content:
+                    ans = "<think>" + response.choices[0].message.reasoning_content + "</think>" + ans
                 if response.choices[0].finish_reason == "length":
                     if is_chinese(ans):
                         ans += LENGTH_NOTIFICATION_CN
@@ -264,11 +267,11 @@ class Base(ABC):
                         if not resp.choices[0].delta.content:
                             resp.choices[0].delta.content = ""
                         if hasattr(resp.choices[0].delta, "reasoning_content") and resp.choices[0].delta.reasoning_content:
-                            ans = ""
                             if not reasoning_start:
                                 reasoning_start = True
-                                ans = "<think>"
-                            ans += resp.choices[0].delta.reasoning_content + "</think>"
+                                ans = "<think>" + resp.choices[0].delta.reasoning_content + "</think>"
+                            else:
+                                ans = resp.choices[0].delta.reasoning_content + "</think>"
                         else:
                             reasoning_start = False
                             ans = resp.choices[0].delta.content
@@ -352,11 +355,11 @@ class Base(ABC):
                 if not resp.choices[0].delta.content:
                     resp.choices[0].delta.content = ""
                 if hasattr(resp.choices[0].delta, "reasoning_content") and resp.choices[0].delta.reasoning_content:
-                    ans = ""
                     if not reasoning_start:
                         reasoning_start = True
-                        ans = "<think>"
-                    ans += resp.choices[0].delta.reasoning_content + "</think>"
+                        ans = "<think>" + resp.choices[0].delta.reasoning_content + "</think>"
+                    else:
+                        ans = resp.choices[0].delta.reasoning_content + "</think>"
                 else:
                     reasoning_start = False
                     ans = resp.choices[0].delta.content

@@ -306,8 +306,11 @@ Output: What's the weather in Rochester on {tomorrow}?
 ###############
     """
     ans = chat_mdl.chat(prompt, [{"role": "user", "content": "Output: "}], {"temperature": 0.2})
+    reasoning = chat_mdl.get_reasoning_content()
     ans = re.sub(r"^.*</think>", "", ans, flags=re.DOTALL)
-    return ans if ans.find("**ERROR**") < 0 else messages[-1]["content"]
+    if ans.find("**ERROR**") < 0:
+        return ans, reasoning
+    return messages[-1]["content"], reasoning
 
 def cross_languages(tenant_id, llm_id, query, languages=[]):
     from api.db.services.llm_service import LLMBundle

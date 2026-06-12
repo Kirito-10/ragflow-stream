@@ -15,6 +15,7 @@
 #
 import logging
 from abc import ABC
+import pandas as pd
 from api.db import LLMType
 from api.db.services.llm_service import LLMBundle
 from agent.component import GenerateParam, Generate
@@ -70,12 +71,13 @@ class Relevant(Generate, ABC):
 
         ans = chat_mdl.chat(self._param.get_prompt(), [{"role": "user", "content": ans}],
                             self._param.gen_conf())
+        reasoning = chat_mdl.get_reasoning_content()
 
         logging.debug(ans)
         if ans.lower().find("yes") >= 0:
-            return Relevant.be_output(self._param.yes)
+            return pd.DataFrame([{"content": self._param.yes, "reasoning_content": reasoning}])
         if ans.lower().find("no") >= 0:
-            return Relevant.be_output(self._param.no)
+            return pd.DataFrame([{"content": self._param.no, "reasoning_content": reasoning}])
         assert False, f"Relevant component got: {ans}"
 
     def debug(self, **kwargs):

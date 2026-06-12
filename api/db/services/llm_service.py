@@ -14,6 +14,7 @@
 #  limitations under the License.
 #
 import logging
+import re
 
 from langfuse import Langfuse
 
@@ -334,7 +335,19 @@ class LLMBundle:
         if last_think_end < first_think_start:
             return txt
 
-        return txt[last_think_end + len("</think>") :]
+        return txt[last_think_end + len("</think>"):]
+
+    def _extract_and_save_reasoning(self, txt: str):
+        """Extract reasoning content from <think>...</think> tags and save it."""
+        match = re.search(r"<think>(.*?)</think>", txt, re.DOTALL)
+        if match:
+            self._last_reasoning = match.group(1)
+        else:
+            self._last_reasoning = ""
+
+    def get_reasoning_content(self) -> str:
+        """Return the last captured reasoning content."""
+        return getattr(self, '_last_reasoning', '')
 
     def chat(self, system, history, gen_conf):
         if self.langfuse:
@@ -345,6 +358,7 @@ class LLMBundle:
             chat = self.mdl.chat_with_tools
 
         txt, used_tokens = chat(system, history, gen_conf)
+        self._extract_and_save_reasoning(txt)
         txt = self._remove_reasoning_content(txt)
 
         if isinstance(txt, int) and not TenantLLMService.increase_usage(self.tenant_id, self.llm_type, used_tokens, self.llm_name):
@@ -373,10 +387,13 @@ class LLMBundle:
                 break
 
             if txt.endswith("</think>"):
-                ans = ans.rstrip("</think>")
+                ans = ans.removesuffix("</think>")
 
             ans += txt
             yield ans
+
+        self._extract_and_save_reasoning(ans)
+
         if total_tokens > 0:
             if not TenantLLMService.increase_usage(self.tenant_id, self.llm_type, txt, self.llm_name):
                 logging.error("LLMBundle.chat_streamly can't update token usage for {}/CHAT llm_name: {}, content: {}".format(self.tenant_id, self.llm_name, txt))

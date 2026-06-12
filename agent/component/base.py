@@ -460,6 +460,37 @@ class ComponentBase(ABC):
         setattr(self._param, self._param.output_var_name, None)
         self._param.inputs = []
 
+    def get_node_info(self):
+        """Get node information including node_id, node_type and output for streaming."""
+        o = getattr(self._param, self._param.output_var_name)
+
+        if isinstance(o, partial):
+            return {
+                "node_id": self._id,
+                "node_type": self.component_name,
+                "output": {"status": "streaming"}
+            }
+
+        if isinstance(o, pd.DataFrame):
+            return {
+                "node_id": self._id,
+                "node_type": self.component_name,
+                "output": o.to_dict(orient="records")
+            }
+
+        if isinstance(o, list):
+            return {
+                "node_id": self._id,
+                "node_type": self.component_name,
+                "output": o
+            }
+
+        return {
+            "node_id": self._id,
+            "node_type": self.component_name,
+            "output": {"content": str(o) if o is not None else ""}
+        }
+
     def set_output(self, v):
         setattr(self._param, self._param.output_var_name, v)
 

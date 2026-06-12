@@ -15,6 +15,7 @@
 #
 import logging
 from abc import ABC
+import pandas as pd
 from api.db import LLMType
 from api.db.services.llm_service import LLMBundle
 from agent.component import GenerateParam, Generate
@@ -89,19 +90,20 @@ class Categorize(Generate, ABC):
 
         ans = chat_mdl.chat(self._param.get_prompt(input), [{"role": "user", "content": "\nCategory: "}],
                             self._param.gen_conf())
+        reasoning = chat_mdl.get_reasoning_content()
         logging.debug(f"input: {input}, answer: {str(ans)}")    
-        # Count the number of times each category appears in the answer.
         category_counts = {}
         for c in self._param.category_description.keys():
             count = ans.lower().count(c.lower())
             category_counts[c] = count
             
-        # If a category is found, return the category with the highest count.
         if any(category_counts.values()):
             max_category = max(category_counts.items(), key=lambda x: x[1])
-            return Categorize.be_output(self._param.category_description[max_category[0]]["to"])
+            return pd.DataFrame([{"content": self._param.category_description[max_category[0]]["to"],
+                                  "reasoning_content": reasoning}])
 
-        return Categorize.be_output(list(self._param.category_description.items())[-1][1]["to"])
+        return pd.DataFrame([{"content": list(self._param.category_description.items())[-1][1]["to"],
+                              "reasoning_content": reasoning}])
 
     def debug(self, **kwargs):
         df = self._run([], **kwargs)

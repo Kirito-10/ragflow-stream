@@ -1,0 +1,514 @@
+diff --git a/agent/canvas.py b/agent/canvas.py
+index 7fc642456..7c5caa608 100644
+--- a/agent/canvas.py
++++ b/agent/canvas.py
+@@ -188,6 +188,10 @@ class Canvas:
+         if not self.path:
+             self.components["begin"]["obj"].run(self.history, **kwargs)
+             self.path.append(["begin"])
++            node_info = self.components["begin"]["obj"].get_node_info()
++            yield {"node_completed": True, "running_status": True, "content": "",
++                   "node_id": node_info["node_id"], "node_type": node_info["node_type"],
++                   "output": node_info["output"]}
+ 
+         self.path.append([])
+ 
+@@ -228,6 +232,10 @@ class Canvas:
+                         ran += 1
+                         raise e
+                     self.path[-1].append(c)
++                    node_info = cpn.get_node_info()
++                    yield {"node_completed": True, "running_status": True, "content": "",
++                           "node_id": node_info["node_id"], "node_type": node_info["node_type"],
++                           "output": node_info["output"]}
+ 
+             ran += 1
+ 
+@@ -241,7 +249,10 @@ class Canvas:
+             downstream = [pid]
+ 
+         for m in prepare2run(downstream):
+-            yield {"content": m, "running_status": True}
++            if isinstance(m, dict):
++                yield m
++            else:
++                yield {"content": m, "running_status": True}
+ 
+         while 0 <= ran < len(self.path[-1]):
+             logging.debug(f"Canvas.run: {ran} {self.path}")
+@@ -271,13 +282,19 @@ class Canvas:
+                 downstream = [pid]
+ 
+             for m in prepare2run(downstream):
+-                yield {"content": m, "running_status": True}
++                if isinstance(m, dict):
++                    yield m
++                else:
++                    yield {"content": m, "running_status": True}
+ 
+             if ran >= len(self.path[-1]) and waiting:
+                 without_dependent_checking = waiting
+                 waiting = []
+                 for m in prepare2run(without_dependent_checking):
+-                    yield {"content": m, "running_status": True}
++                    if isinstance(m, dict):
++                        yield m
++                    else:
++                        yield {"content": m, "running_status": True}
+                 without_dependent_checking = []
+                 ran -= 1
+ 
+@@ -292,7 +309,6 @@ class Canvas:
+                     yield an
+             else:
+                 yield ans
+-
+         else:
+             raise Exception("The dialog flow has no way to interact with you. Please add an 'Interact' component to the end of the flow.")
+ 
+diff --git a/agent/component/base.py b/agent/component/base.py
+index 15b3c345e..9701b48dc 100644
+--- a/agent/component/base.py
++++ b/agent/component/base.py
+@@ -460,6 +460,37 @@ class ComponentBase(ABC):
+         setattr(self._param, self._param.output_var_name, None)
+         self._param.inputs = []
+ 
++    def get_node_info(self):
++        """Get node information including node_id, node_type and output for streaming."""
++        o = getattr(self._param, self._param.output_var_name)
++
++        if isinstance(o, partial):
++            return {
++                "node_id": self._id,
++                "node_type": self.component_name,
++                "output": {"status": "streaming"}
++            }
++
++        if isinstance(o, pd.DataFrame):
++            return {
++                "node_id": self._id,
++                "node_type": self.component_name,
++                "output": o.to_dict(orient="records")
++            }
++
++        if isinstance(o, list):
++            return {
++                "node_id": self._id,
++                "node_type": self.component_name,
++                "output": o
++            }
++
++        return {
++            "node_id": self._id,
++            "node_type": self.component_name,
++            "output": {"content": str(o) if o is not None else ""}
++        }
++
+     def set_output(self, v):
+         setattr(self._param, self._param.output_var_name, v)
+ 
+diff --git a/agent/component/categorize.py b/agent/component/categorize.py
+index 9171f809a..951108984 100644
+--- a/agent/component/categorize.py
++++ b/agent/component/categorize.py
+@@ -15,6 +15,7 @@
+ #
+ import logging
+ from abc import ABC
++import pandas as pd
+ from api.db import LLMType
+ from api.db.services.llm_service import LLMBundle
+ from agent.component import GenerateParam, Generate
+@@ -89,19 +90,20 @@ class Categorize(Generate, ABC):
+ 
+         ans = chat_mdl.chat(self._param.get_prompt(input), [{"role": "user", "content": "\nCategory: "}],
+                             self._param.gen_conf())
++        reasoning = chat_mdl.get_reasoning_content()
+         logging.debug(f"input: {input}, answer: {str(ans)}")    
+-        # Count the number of times each category appears in the answer.
+         category_counts = {}
+         for c in self._param.category_description.keys():
+             count = ans.lower().count(c.lower())
+             category_counts[c] = count
+             
+-        # If a category is found, return the category with the highest count.
+         if any(category_counts.values()):
+             max_category = max(category_counts.items(), key=lambda x: x[1])
+-            return Categorize.be_output(self._param.category_description[max_category[0]]["to"])
++            return pd.DataFrame([{"content": self._param.category_description[max_category[0]]["to"],
++                                  "reasoning_content": reasoning}])
+ 
+-        return Categorize.be_output(list(self._param.category_description.items())[-1][1]["to"])
++        return pd.DataFrame([{"content": list(self._param.category_description.items())[-1][1]["to"],
++                              "reasoning_content": reasoning}])
+ 
+     def debug(self, **kwargs):
+         df = self._run([], **kwargs)
+diff --git a/agent/component/exesql.py b/agent/component/exesql.py
+index 2c414ddb7..2c4cad3c2 100644
+--- a/agent/component/exesql.py
++++ b/agent/component/exesql.py
+@@ -61,7 +61,6 @@ class ExeSQL(Generate, ABC):
+     component_name = "ExeSQL"
+ 
+     def _refactor(self, ans):
+-        ans = re.sub(r"^.*</think>", "", ans, flags=re.DOTALL)
+         match = re.search(r"```sql\s*(.*?)\s*```", ans, re.DOTALL)
+         if match:
+             ans = match.group(1)  # Query content
+diff --git a/agent/component/generate.py b/agent/component/generate.py
+index f0cdb1f15..2ecd3aa0a 100644
+--- a/agent/component/generate.py
++++ b/agent/component/generate.py
+@@ -224,13 +224,14 @@ class Generate(ComponentBase):
+         if len(msg) < 2:
+             msg.append({"role": "user", "content": "Output: "})
+         ans = chat_mdl.chat(msg[0]["content"], msg[1:], self._param.gen_conf())
+-        ans = re.sub(r"^.*</think>", "", ans, flags=re.DOTALL)
++        reasoning = chat_mdl.get_reasoning_content()
+         self._canvas.set_component_infor(self._id, {"prompt":msg[0]["content"],"messages":  msg[1:],"conf":  self._param.gen_conf()})
+         if self._param.cite and "chunks" in retrieval_res.columns:
+             res = self.set_cite(retrieval_res, ans)
++            res["reasoning_content"] = reasoning
+             return pd.DataFrame([res])
+ 
+-        return Generate.be_output(ans)
++        return pd.DataFrame([{"content": ans, "reasoning_content": reasoning}])
+ 
+     def stream_output(self, chat_mdl, prompt, retrieval_res):
+         res = None
+@@ -250,13 +251,21 @@ class Generate(ComponentBase):
+         if len(msg) < 2:
+             msg.append({"role": "user", "content": "Output: "})
+         answer = ""
++        last_reasoning = ""
+         for ans in chat_mdl.chat_streamly(msg[0]["content"], msg[1:], self._param.gen_conf()):
+-            res = {"content": ans, "reference": []}
+             answer = ans
++            if "</think>" in ans:
++                parts = ans.split("</think>", 1)
++                last_reasoning = parts[0] + "</think>"
++                content = parts[1]
++            else:
++                content = ans
++            res = {"content": content, "reasoning_content": last_reasoning, "reference": []}
+             yield res
+ 
+         if self._param.cite and "chunks" in retrieval_res.columns:
+             res = self.set_cite(retrieval_res, answer)
++            res["reasoning_content"] = chat_mdl.get_reasoning_content()
+             yield res
+         self._canvas.set_component_infor(self._id, {"prompt":msg[0]["content"],"messages":  msg[1:],"conf":  self._param.gen_conf()})
+         self.set_output(Generate.be_output(res))
+diff --git a/agent/component/keyword.py b/agent/component/keyword.py
+index a34a1ad46..5b4048831 100644
+--- a/agent/component/keyword.py
++++ b/agent/component/keyword.py
+@@ -15,6 +15,7 @@
+ #
+ import logging
+ import re
++import pandas as pd
+ from abc import ABC
+ from api.db import LLMType
+ from api.db.services.llm_service import LLMBundle
+@@ -62,11 +63,11 @@ class KeywordExtract(Generate, ABC):
+ 
+         ans = chat_mdl.chat(self._param.get_prompt(), [{"role": "user", "content": query}],
+                             self._param.gen_conf())
++        reasoning = chat_mdl.get_reasoning_content()
+ 
+-        ans = re.sub(r"^.*</think>", "", ans, flags=re.DOTALL)
+         ans = re.sub(r".*keyword:", "", ans).strip()
+         logging.debug(f"ans: {ans}")
+-        return KeywordExtract.be_output(ans)
++        return pd.DataFrame([{"content": ans, "reasoning_content": reasoning}])
+ 
+     def debug(self, **kwargs):
+         return self._run([], **kwargs)
+diff --git a/agent/component/relevant.py b/agent/component/relevant.py
+index 201506afa..5747a6e1d 100644
+--- a/agent/component/relevant.py
++++ b/agent/component/relevant.py
+@@ -15,6 +15,7 @@
+ #
+ import logging
+ from abc import ABC
++import pandas as pd
+ from api.db import LLMType
+ from api.db.services.llm_service import LLMBundle
+ from agent.component import GenerateParam, Generate
+@@ -70,12 +71,13 @@ class Relevant(Generate, ABC):
+ 
+         ans = chat_mdl.chat(self._param.get_prompt(), [{"role": "user", "content": ans}],
+                             self._param.gen_conf())
++        reasoning = chat_mdl.get_reasoning_content()
+ 
+         logging.debug(ans)
+         if ans.lower().find("yes") >= 0:
+-            return Relevant.be_output(self._param.yes)
++            return pd.DataFrame([{"content": self._param.yes, "reasoning_content": reasoning}])
+         if ans.lower().find("no") >= 0:
+-            return Relevant.be_output(self._param.no)
++            return pd.DataFrame([{"content": self._param.no, "reasoning_content": reasoning}])
+         assert False, f"Relevant component got: {ans}"
+ 
+     def debug(self, **kwargs):
+diff --git a/agent/component/rewrite.py b/agent/component/rewrite.py
+index 0ab19d412..3a4796725 100644
+--- a/agent/component/rewrite.py
++++ b/agent/component/rewrite.py
+@@ -14,6 +14,7 @@
+ #  limitations under the License.
+ #
+ from abc import ABC
++import pandas as pd
+ from agent.component import GenerateParam, Generate
+ from rag.prompts import full_question
+ 
+@@ -43,10 +44,10 @@ class RewriteQuestion(Generate, ABC):
+         messages = [h for h in hist if h["role"]!="system"]
+         if messages[-1]["role"] != "user":
+             messages.append({"role": "user", "content": query})
+-        ans = full_question(self._canvas.get_tenant_id(), self._param.llm_id, messages, self.gen_lang(self._param.language))
++        ans, reasoning = full_question(self._canvas.get_tenant_id(), self._param.llm_id, messages, self.gen_lang(self._param.language))
+         self._canvas.history.pop()
+         self._canvas.history.append(("user", ans))
+-        return RewriteQuestion.be_output(ans)
++        return pd.DataFrame([{"content": ans, "reasoning_content": reasoning}])
+ 
+     @staticmethod
+     def gen_lang(language):
+diff --git a/api/apps/canvas_app.py b/api/apps/canvas_app.py
+index b55ab0d5d..53926022b 100644
+--- a/api/apps/canvas_app.py
++++ b/api/apps/canvas_app.py
+@@ -141,14 +141,21 @@ def run():
+             try:
+                 for ans in canvas.run(running_hint_text = running_hint_text, stream=True):
+                     if ans.get("running_status"):
++                        data = {"answer": ans["content"], "running_status": True}
++                        if ans.get("node_completed"):
++                            data["node_completed"] = ans["node_completed"]
++                            data["node_id"] = ans.get("node_id", "")
++                            data["node_type"] = ans.get("node_type", "")
++                            data["output"] = ans.get("output", {})
+                         yield "data:" + json.dumps({"code": 0, "message": "",
+-                                                    "data": {"answer": ans["content"],
+-                                                             "running_status": True}},
++                                                    "data": data},
+                                                    ensure_ascii=False) + "\n\n"
+                         continue
+                     for k in ans.keys():
+                         final_ans[k] = ans[k]
+                     ans = {"answer": ans["content"], "reference": ans.get("reference", [])}
++                    if "reasoning_content" in final_ans:
++                        ans["reasoning_content"] = final_ans["reasoning_content"]
+                     yield "data:" + json.dumps({"code": 0, "message": "", "data": ans}, ensure_ascii=False) + "\n\n"
+ 
+                 canvas.messages.append({"role": "assistant", "content": final_ans["content"], "id": message_id})
+diff --git a/api/db/services/canvas_service.py b/api/db/services/canvas_service.py
+index bca6a6be9..2f6e02b0d 100644
+--- a/api/db/services/canvas_service.py
++++ b/api/db/services/canvas_service.py
+@@ -162,6 +162,12 @@ def completion(tenant_id, agent_id, question, session_id=None, stream=True, **kw
+         canvas = Canvas(json.dumps(conv.dsl), tenant_id)
+         canvas.messages.append({"role": "user", "content": question, "id": message_id})
+         canvas.add_user_input(question)
++        # Reset execution state only if the previous run completed the full workflow
++        # (intermediate nodes like Generate/Retrieval/Categorize were already executed).
++        # If only Begin→Answer ran (conversation mid-flow), resume normally.
++        if len(canvas.path) >= 2 and len(canvas.path[-1]) > 1:
++            canvas.path = []
++            canvas.answer = []
+         if not conv.message:
+             conv.message = []
+         conv.message.append({
+@@ -178,26 +184,37 @@ def completion(tenant_id, agent_id, question, session_id=None, stream=True, **kw
+         try:
+             for ans in canvas.run(stream=stream):
+                 if ans.get("running_status"):
++                    data = {"answer": ans["content"], "running_status": True}
++                    if ans.get("node_completed"):
++                        data["node_completed"] = ans["node_completed"]
++                        data["node_id"] = ans.get("node_id", "")
++                        data["node_type"] = ans.get("node_type", "")
++                        data["output"] = ans.get("output", {})
+                     yield "data:" + json.dumps({"code": 0, "message": "",
+-                                                "data": {"answer": ans["content"],
+-                                                         "running_status": True}},
++                                                "data": data},
+                                                ensure_ascii=False) + "\n\n"
+                     continue
+                 for k in ans.keys():
+                     final_ans[k] = ans[k]
+-                ans = {"answer": ans["content"], "reference": ans.get("reference", []), "param": canvas.get_preset_param()}
+-                ans = structure_answer(conv, ans, message_id, session_id)
+-                yield "data:" + json.dumps({"code": 0, "message": "", "data": ans},
++                ans_data = {"answer": ans["content"], "reference": ans.get("reference", []), "param": canvas.get_preset_param()}
++                if "reasoning_content" in final_ans:
++                    ans_data["reasoning_content"] = final_ans["reasoning_content"]
++                ans_data = structure_answer(conv, ans_data, message_id, session_id)
++                yield "data:" + json.dumps({"code": 0, "message": "", "data": ans_data},
+                                            ensure_ascii=False) + "\n\n"
+ 
+             canvas.messages.append({"role": "assistant", "content": final_ans["content"], "created_at": time.time(), "id": message_id})
+             canvas.history.append(("assistant", final_ans["content"]))
++            if not canvas.path[-1]:
++                canvas.path.pop(-1)
+             if final_ans.get("reference"):
+                 canvas.reference.append(final_ans["reference"])
+             conv.dsl = json.loads(str(canvas))
+             API4ConversationService.append_message(conv.id, conv.to_dict())
+         except Exception as e:
+             traceback.print_exc()
++            if not canvas.path[-1]:
++                canvas.path.pop(-1)
+             conv.dsl = json.loads(str(canvas))
+             API4ConversationService.append_message(conv.id, conv.to_dict())
+             yield "data:" + json.dumps({"code": 500, "message": str(e),
+@@ -321,11 +338,17 @@ def completionOpenAI(tenant_id, agent_id, question, session_id=None, stream=True
+             for ans in canvas.run(stream=True):
+                 if ans.get("running_status"):
+                     completion_tokens += len(tiktokenenc.encode(ans.get("content", "")))
++                    content = ans["content"]
++                    if ans.get("node_completed"):
++                        content = json.dumps({"node_completed": True, "node_id": ans.get("node_id", ""),
++                                              "node_type": ans.get("node_type", ""),
++                                              "output": ans.get("output", {}),
++                                              "content": content}, ensure_ascii=False)
+                     yield "data: " + json.dumps(
+                         get_data_openai(
+                             id=session_id,
+                             model=agent_id,
+-                            content=ans["content"],
++                            content=content,
+                             object="chat.completion.chunk",
+                             completion_tokens=completion_tokens,
+                             prompt_tokens=prompt_tokens
+@@ -333,16 +356,21 @@ def completionOpenAI(tenant_id, agent_id, question, session_id=None, stream=True
+                         ensure_ascii=False
+                     ) + "\n\n"
+                     continue
+-                
++
+                 for k in ans.keys():
+                     final_ans[k] = ans[k]
+-                
++
+                 completion_tokens += len(tiktokenenc.encode(final_ans.get("content", "")))
++                content = final_ans["content"]
++                if final_ans.get("reasoning_content"):
++                    content = json.dumps({"content": final_ans["content"],
++                                          "reasoning_content": final_ans["reasoning_content"]},
++                                         ensure_ascii=False)
+                 yield "data: " + json.dumps(
+                     get_data_openai(
+                         id=session_id,
+                         model=agent_id,
+-                        content=final_ans["content"],
++                        content=content,
+                         object="chat.completion.chunk",
+                         finish_reason="stop",
+                         completion_tokens=completion_tokens,
+diff --git a/api/db/services/llm_service.py b/api/db/services/llm_service.py
+index 02e66944e..15fc86de5 100644
+--- a/api/db/services/llm_service.py
++++ b/api/db/services/llm_service.py
+@@ -14,6 +14,7 @@
+ #  limitations under the License.
+ #
+ import logging
++import re
+ 
+ from langfuse import Langfuse
+ 
+@@ -334,7 +335,19 @@ class LLMBundle:
+         if last_think_end < first_think_start:
+             return txt
+ 
+-        return txt[last_think_end + len("</think>") :]
++        return txt[last_think_end + len("</think>"):]
++
++    def _extract_and_save_reasoning(self, txt: str):
++        """Extract reasoning content from <think>...</think> tags and save it."""
++        match = re.search(r"<think>(.*?)</think>", txt, re.DOTALL)
++        if match:
++            self._last_reasoning = match.group(1)
++        else:
++            self._last_reasoning = ""
++
++    def get_reasoning_content(self) -> str:
++        """Return the last captured reasoning content."""
++        return getattr(self, '_last_reasoning', '')
+ 
+     def chat(self, system, history, gen_conf):
+         if self.langfuse:
+@@ -345,6 +358,7 @@ class LLMBundle:
+             chat = self.mdl.chat_with_tools
+ 
+         txt, used_tokens = chat(system, history, gen_conf)
++        self._extract_and_save_reasoning(txt)
+         txt = self._remove_reasoning_content(txt)
+ 
+         if isinstance(txt, int) and not TenantLLMService.increase_usage(self.tenant_id, self.llm_type, used_tokens, self.llm_name):
+@@ -373,10 +387,13 @@ class LLMBundle:
+                 break
+ 
+             if txt.endswith("</think>"):
+-                ans = ans.rstrip("</think>")
++                ans = ans.removesuffix("</think>")
+ 
+             ans += txt
+             yield ans
++
++        self._extract_and_save_reasoning(ans)
++
+         if total_tokens > 0:
+             if not TenantLLMService.increase_usage(self.tenant_id, self.llm_type, txt, self.llm_name):
+                 logging.error("LLMBundle.chat_streamly can't update token usage for {}/CHAT llm_name: {}, content: {}".format(self.tenant_id, self.llm_name, txt))
+diff --git a/rag/llm/chat_model.py b/rag/llm/chat_model.py
+index c9c8f8884..cb8389e77 100644
+--- a/rag/llm/chat_model.py
++++ b/rag/llm/chat_model.py
+@@ -194,6 +194,9 @@ class Base(ABC):
+                 if any([not response.choices, not response.choices[0].message, not response.choices[0].message.content]):
+                     return "", 0
+                 ans = response.choices[0].message.content.strip()
++                # Wrap reasoning_content in <think> tags if present (e.g. DeepSeek R1)
++                if hasattr(response.choices[0].message, "reasoning_content") and response.choices[0].message.reasoning_content:
++                    ans = "<think>" + response.choices[0].message.reasoning_content + "</think>" + ans
+                 if response.choices[0].finish_reason == "length":
+                     if is_chinese(ans):
+                         ans += LENGTH_NOTIFICATION_CN
+@@ -264,11 +267,11 @@ class Base(ABC):
+                         if not resp.choices[0].delta.content:
+                             resp.choices[0].delta.content = ""
+                         if hasattr(resp.choices[0].delta, "reasoning_content") and resp.choices[0].delta.reasoning_content:
+-                            ans = ""
+                             if not reasoning_start:
+                                 reasoning_start = True
+-                                ans = "<think>"
+-                            ans += resp.choices[0].delta.reasoning_content + "</think>"
++                                ans = "<think>" + resp.choices[0].delta.reasoning_content + "</think>"
++                            else:
++                                ans = resp.choices[0].delta.reasoning_content + "</think>"
+                         else:
+                             reasoning_start = False
+                             ans = resp.choices[0].delta.content
+@@ -352,11 +355,11 @@ class Base(ABC):
+                 if not resp.choices[0].delta.content:
+                     resp.choices[0].delta.content = ""
+                 if hasattr(resp.choices[0].delta, "reasoning_content") and resp.choices[0].delta.reasoning_content:
+-                    ans = ""
+                     if not reasoning_start:
+                         reasoning_start = True
+-                        ans = "<think>"
+-                    ans += resp.choices[0].delta.reasoning_content + "</think>"
++                        ans = "<think>" + resp.choices[0].delta.reasoning_content + "</think>"
++                    else:
++                        ans = resp.choices[0].delta.reasoning_content + "</think>"
+                 else:
+                     reasoning_start = False
+                     ans = resp.choices[0].delta.content

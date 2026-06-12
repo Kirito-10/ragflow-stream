@@ -162,6 +162,12 @@ def completion(tenant_id, agent_id, question, session_id=None, stream=True, **kw
         canvas = Canvas(json.dumps(conv.dsl), tenant_id)
         canvas.messages.append({"role": "user", "content": question, "id": message_id})
         canvas.add_user_input(question)
+        # Reset execution state only if the previous run completed the full workflow
+        # (intermediate nodes like Generate/Retrieval/Categorize were already executed).
+        # If only Begin→Answer ran (conversation mid-flow), resume normally.
+        if len(canvas.path) >= 2 and len(canvas.path[-1]) > 1:
+            canvas.path = []
+            canvas.answer = []
         if not conv.message:
             conv.message = []
         conv.message.append({
@@ -178,26 +184,37 @@ def completion(tenant_id, agent_id, question, session_id=None, stream=True, **kw
         try:
             for ans in canvas.run(stream=stream):
                 if ans.get("running_status"):
+                    data = {"answer": ans["content"], "running_status": True}
+                    if ans.get("node_completed"):
+                        data["node_completed"] = ans["node_completed"]
+                        data["node_id"] = ans.get("node_id", "")
+                        data["node_type"] = ans.get("node_type", "")
+                        data["output"] = ans.get("output", {})
                     yield "data:" + json.dumps({"code": 0, "message": "",
-                                                "data": {"answer": ans["content"],
-                                                         "running_status": True}},
+                                                "data": data},
                                                ensure_ascii=False) + "\n\n"
                     continue
                 for k in ans.keys():
                     final_ans[k] = ans[k]
-                ans = {"answer": ans["content"], "reference": ans.get("reference", []), "param": canvas.get_preset_param()}
-                ans = structure_answer(conv, ans, message_id, session_id)
-                yield "data:" + json.dumps({"code": 0, "message": "", "data": ans},
+                ans_data = {"answer": ans["content"], "reference": ans.get("reference", []), "param": canvas.get_preset_param()}
+                if "reasoning_content" in final_ans:
+                    ans_data["reasoning_content"] = final_ans["reasoning_content"]
+                ans_data = structure_answer(conv, ans_data, message_id, session_id)
+                yield "data:" + json.dumps({"code": 0, "message": "", "data": ans_data},
                                            ensure_ascii=False) + "\n\n"
 
             canvas.messages.append({"role": "assistant", "content": final_ans["content"], "created_at": time.time(), "id": message_id})
             canvas.history.append(("assistant", final_ans["content"]))
+            if not canvas.path[-1]:
+                canvas.path.pop(-1)
             if final_ans.get("reference"):
                 canvas.reference.append(final_ans["reference"])
             conv.dsl = json.loads(str(canvas))
             API4ConversationService.append_message(conv.id, conv.to_dict())
         except Exception as e:
             traceback.print_exc()
+            if not canvas.path[-1]:
+                canvas.path.pop(-1)
             conv.dsl = json.loads(str(canvas))
             API4ConversationService.append_message(conv.id, conv.to_dict())
             yield "data:" + json.dumps({"code": 500, "message": str(e),
@@ -321,11 +338,17 @@ def completionOpenAI(tenant_id, agent_id, question, session_id=None, stream=True
             for ans in canvas.run(stream=True):
                 if ans.get("running_status"):
                     completion_tokens += len(tiktokenenc.encode(ans.get("content", "")))
+                    content = ans["content"]
+                    if ans.get("node_completed"):
+                        content = json.dumps({"node_completed": True, "node_id": ans.get("node_id", ""),
+                                              "node_type": ans.get("node_type", ""),
+                                              "output": ans.get("output", {}),
+                                              "content": content}, ensure_ascii=False)
                     yield "data: " + json.dumps(
                         get_data_openai(
                             id=session_id,
                             model=agent_id,
-                            content=ans["content"],
+                            content=content,
                             object="chat.completion.chunk",
                             completion_tokens=completion_tokens,
                             prompt_tokens=prompt_tokens
@@ -333,16 +356,21 @@ def completionOpenAI(tenant_id, agent_id, question, session_id=None, stream=True
                         ensure_ascii=False
                     ) + "\n\n"
                     continue
-                
+
                 for k in ans.keys():
                     final_ans[k] = ans[k]
-                
+
                 completion_tokens += len(tiktokenenc.encode(final_ans.get("content", "")))
+                content = final_ans["content"]
+                if final_ans.get("reasoning_content"):
+                    content = json.dumps({"content": final_ans["content"],
+                                          "reasoning_content": final_ans["reasoning_content"]},
+                                         ensure_ascii=False)
                 yield "data: " + json.dumps(
                     get_data_openai(
                         id=session_id,
                         model=agent_id,
-                        content=final_ans["content"],
+                        content=content,
                         object="chat.completion.chunk",
                         finish_reason="stop",
                         completion_tokens=completion_tokens,

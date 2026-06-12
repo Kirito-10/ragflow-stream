@@ -120,11 +120,13 @@ def chat_solo(dialog, messages, stream=True):
             delta_ans = ""
         if delta_ans:
             yield {"answer": answer, "reference": {}, "audio_binary": tts(tts_mdl, delta_ans), "prompt": "", "created_at": time.time()}
+        yield {"answer": answer, "reference": {}, "reasoning_content": chat_mdl.get_reasoning_content(), "audio_binary": tts(tts_mdl, delta_ans), "prompt": "", "created_at": time.time()}
     else:
         answer = chat_mdl.chat(prompt_config.get("system", ""), msg, dialog.llm_setting)
+        reasoning = chat_mdl.get_reasoning_content()
         user_content = msg[-1].get("content", "[content not available]")
         logging.debug("User: {}|Assistant: {}".format(user_content, answer))
-        yield {"answer": answer, "reference": {}, "audio_binary": tts(tts_mdl, answer), "prompt": "", "created_at": time.time()}
+        yield {"answer": answer, "reference": {}, "reasoning_content": reasoning, "audio_binary": tts(tts_mdl, answer), "prompt": "", "created_at": time.time()}
 
 
 def chat(dialog, messages, stream=True, **kwargs):
@@ -210,7 +212,8 @@ def chat(dialog, messages, stream=True, **kwargs):
             prompt_config["system"] = prompt_config["system"].replace("{%s}" % p["key"], " ")
 
     if len(questions) > 1 and prompt_config.get("refine_multiturn"):
-        questions = [full_question(dialog.tenant_id, dialog.llm_id, messages)]
+        q, _ = full_question(dialog.tenant_id, dialog.llm_id, messages)
+        questions = [q]
     else:
         questions = questions[-1:]
 
@@ -339,11 +342,13 @@ def chat(dialog, messages, stream=True, **kwargs):
         nonlocal prompt_config, knowledges, kwargs, kbinfos, prompt, retrieval_ts, questions, langfuse_tracer
 
         refs = []
-        ans = answer.split("</think>")
-        think = ""
-        if len(ans) == 2:
-            think = ans[0] + "</think>"
-            answer = ans[1]
+        reasoning = chat_mdl.get_reasoning_content() or ""
+        # Fallback: strip thinking tags from answer if present (streaming case)
+        parts = answer.split("</think>")
+        if len(parts) == 2:
+            if not reasoning:
+                reasoning = parts[0] + "</think>"
+            answer = parts[1]
 
         if knowledges and (prompt_config.get("quote", True) and kwargs.get("quote", True)):
             answer = re.sub(r"##[ij]\$\$", "", answer, flags=re.DOTALL)
@@ -392,7 +397,7 @@ def chat(dialog, messages, stream=True, **kwargs):
         retrieval_time_cost = (retrieval_ts - generate_keyword_ts) * 1000
         generate_result_time_cost = (finish_chat_ts - retrieval_ts) * 1000
 
-        tk_num = num_tokens_from_string(think + answer)
+        tk_num = num_tokens_from_string(reasoning + answer)
         prompt += "\n\n### Query:\n%s" % " ".join(questions)
         prompt = (
             f"{prompt}\n\n"
@@ -420,7 +425,7 @@ def chat(dialog, messages, stream=True, **kwargs):
         if langfuse_tracer and "langfuse_generation" in locals():
             langfuse_generation.end(output=langfuse_output)
 
-        return {"answer": think + answer, "reference": refs, "prompt": re.sub(r"\n", "  \n", prompt), "created_at": time.time()}
+        return {"answer": answer, "reference": refs, "reasoning_content": reasoning, "prompt": re.sub(r"\n", "  \n", prompt), "created_at": time.time()}
 
     if langfuse_tracer:
         langfuse_generation = langfuse_tracer.trace.generation(name="chat", model=llm_model_config["llm_name"], input={"prompt": prompt, "prompt4citation": prompt4citation, "messages": msg})

@@ -141,14 +141,21 @@ def run():
             try:
                 for ans in canvas.run(running_hint_text = running_hint_text, stream=True):
                     if ans.get("running_status"):
+                        data = {"answer": ans["content"], "running_status": True}
+                        if ans.get("node_completed"):
+                            data["node_completed"] = ans["node_completed"]
+                            data["node_id"] = ans.get("node_id", "")
+                            data["node_type"] = ans.get("node_type", "")
+                            data["output"] = ans.get("output", {})
                         yield "data:" + json.dumps({"code": 0, "message": "",
-                                                    "data": {"answer": ans["content"],
-                                                             "running_status": True}},
+                                                    "data": data},
                                                    ensure_ascii=False) + "\n\n"
                         continue
                     for k in ans.keys():
                         final_ans[k] = ans[k]
                     ans = {"answer": ans["content"], "reference": ans.get("reference", [])}
+                    if "reasoning_content" in final_ans:
+                        ans["reasoning_content"] = final_ans["reasoning_content"]
                     yield "data:" + json.dumps({"code": 0, "message": "", "data": ans}, ensure_ascii=False) + "\n\n"
 
                 canvas.messages.append({"role": "assistant", "content": final_ans["content"], "id": message_id})

@@ -188,6 +188,10 @@ class Canvas:
         if not self.path:
             self.components["begin"]["obj"].run(self.history, **kwargs)
             self.path.append(["begin"])
+            node_info = self.components["begin"]["obj"].get_node_info()
+            yield {"node_completed": True, "running_status": True, "content": "",
+                   "node_id": node_info["node_id"], "node_type": node_info["node_type"],
+                   "output": node_info["output"]}
 
         self.path.append([])
 
@@ -228,6 +232,10 @@ class Canvas:
                         ran += 1
                         raise e
                     self.path[-1].append(c)
+                    node_info = cpn.get_node_info()
+                    yield {"node_completed": True, "running_status": True, "content": "",
+                           "node_id": node_info["node_id"], "node_type": node_info["node_type"],
+                           "output": node_info["output"]}
 
             ran += 1
 
@@ -241,7 +249,10 @@ class Canvas:
             downstream = [pid]
 
         for m in prepare2run(downstream):
-            yield {"content": m, "running_status": True}
+            if isinstance(m, dict):
+                yield m
+            else:
+                yield {"content": m, "running_status": True}
 
         while 0 <= ran < len(self.path[-1]):
             logging.debug(f"Canvas.run: {ran} {self.path}")
@@ -271,13 +282,19 @@ class Canvas:
                 downstream = [pid]
 
             for m in prepare2run(downstream):
-                yield {"content": m, "running_status": True}
+                if isinstance(m, dict):
+                    yield m
+                else:
+                    yield {"content": m, "running_status": True}
 
             if ran >= len(self.path[-1]) and waiting:
                 without_dependent_checking = waiting
                 waiting = []
                 for m in prepare2run(without_dependent_checking):
-                    yield {"content": m, "running_status": True}
+                    if isinstance(m, dict):
+                        yield m
+                    else:
+                        yield {"content": m, "running_status": True}
                 without_dependent_checking = []
                 ran -= 1
 
@@ -292,7 +309,6 @@ class Canvas:
                     yield an
             else:
                 yield ans
-
         else:
             raise Exception("The dialog flow has no way to interact with you. Please add an 'Interact' component to the end of the flow.")
 

@@ -14,6 +14,7 @@
 #  limitations under the License.
 #
 from abc import ABC
+import pandas as pd
 from agent.component import GenerateParam, Generate
 from rag.prompts import full_question
 
@@ -43,10 +44,10 @@ class RewriteQuestion(Generate, ABC):
         messages = [h for h in hist if h["role"]!="system"]
         if messages[-1]["role"] != "user":
             messages.append({"role": "user", "content": query})
-        ans = full_question(self._canvas.get_tenant_id(), self._param.llm_id, messages, self.gen_lang(self._param.language))
+        ans, reasoning = full_question(self._canvas.get_tenant_id(), self._param.llm_id, messages, self.gen_lang(self._param.language))
         self._canvas.history.pop()
         self._canvas.history.append(("user", ans))
-        return RewriteQuestion.be_output(ans)
+        return pd.DataFrame([{"content": ans, "reasoning_content": reasoning}])
 
     @staticmethod
     def gen_lang(language):

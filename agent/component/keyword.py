@@ -15,6 +15,7 @@
 #
 import logging
 import re
+import pandas as pd
 from abc import ABC
 from api.db import LLMType
 from api.db.services.llm_service import LLMBundle
@@ -62,11 +63,11 @@ class KeywordExtract(Generate, ABC):
 
         ans = chat_mdl.chat(self._param.get_prompt(), [{"role": "user", "content": query}],
                             self._param.gen_conf())
+        reasoning = chat_mdl.get_reasoning_content()
 
-        ans = re.sub(r"^.*</think>", "", ans, flags=re.DOTALL)
         ans = re.sub(r".*keyword:", "", ans).strip()
         logging.debug(f"ans: {ans}")
-        return KeywordExtract.be_output(ans)
+        return pd.DataFrame([{"content": ans, "reasoning_content": reasoning}])
 
     def debug(self, **kwargs):
         return self._run([], **kwargs)
