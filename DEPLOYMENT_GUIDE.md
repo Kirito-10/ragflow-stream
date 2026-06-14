@@ -281,12 +281,63 @@ curl http://localhost:9380/api/health
 3. **网络权限**：确保服务器可以访问 GitHub
 4. **数据备份**：部署前建议备份现有数据
 
+## 场景二：已有完整代码的部署流程
+
+如果当前电脑上已经有了完整的 RAGFlow 文件结构，部署步骤会更简单：
+
+### 1. 添加远程仓库
+
+```bash
+cd /path/to/your/existing/ragflow-code
+git remote add stream git@github.com:Kirito-10/ragflow-stream.git
+```
+
+### 2. 拉取修改的代码
+
+```bash
+# 拉取远程分支
+git fetch stream
+
+# 只更新修改的三个目录（保留其他文件不变）
+git checkout stream/main -- agent/ api/ rag/
+```
+
+### 3. 验证挂载配置
+
+确保 `docker-compose.yml` 中已正确挂载这三个目录：
+
+```yaml
+volumes:
+  - ./agent:/ragflow/agent
+  - ./api:/ragflow/api
+  - ./rag:/ragflow/rag
+```
+
+### 4. 重启服务
+
+```bash
+docker-compose restart ragflow
+```
+
+### 5. 验证修改
+
+```bash
+curl -X POST http://localhost:9380/api/v1/agents/{agent_id}/completions \
+  -H "Content-Type: application/json" \
+  -d '{"question": "测试问题", "stream": true}'
+```
+
 ## 总结
 
-通过以上步骤，你可以：
-1. 从 GitHub 拉取修改的代码
-2. 通过 Docker Volume 挂载到现有服务
-3. 实现节点流式输出和 Thinking 透传功能
-4. 轻松更新代码
+### 场景一：从零开始部署
+1. 创建代码目录
+2. 从 GitHub 拉取代码
+3. 配置挂载
+4. 启动服务
 
-这种方式无需重新构建镜像，直接使用官方镜像运行，只替换修改的代码文件。
+### 场景二：已有完整代码
+1. 添加远程仓库
+2. 拉取修改的三个目录
+3. 重启容器
+
+两种方式都无需重新构建镜像，直接使用官方镜像运行，只替换修改的代码文件。
